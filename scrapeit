@@ -1,46 +1,126 @@
 #!/usr/bin/env ruby
 
+require 'logger'
+require 'digest'
 require 'json'
 require 'nokogiri'
 require 'open-uri'
+require 'open_uri_redirections'
+
 require './moose/title_parser'
+require './moose/processor'
+require './moose/stamper_service'
+require './moose/tag_service'
 
-URL = "http://www.reddit.com/r/moosearchive/comments/1hhjnb/archive/"
-MD_FILE = "./moose.md"
-JSON_FILE = "./moose.json"
 
-puts "Getting comment links from: #{URL}"
 
-doc = Nokogiri::HTML(open(URL))
-nodes = []
-File.open("unreachable.txt","w") {|f| f.write "" }
-
-puts "#{doc.css(".usertext-body a").count} links" 
-
-doc.css(".usertext-body a").each do |link|
-  begin
-    title = Moose::TitleParser.parse(link.content)
-
-    nodes << {
-      :title => title,
-      :href  => link.content
-    }
-
-    unless File.read(MD_FILE).include? link.content
-      File.open(MD_FILE, "a") do |f|
-        f.puts "[#{title}](#{link.content})"
-      end
+module Moose
+  class IndexList
+    def initialize(list, path)
+      @list = list
+      @path = path
     end
 
-    puts "Added: #{link.content}"
-  rescue => e
-    STDERR.puts "Failed: #{link.content} (#{e.class.name}: #{e.message})"
-    File.open("unreachable.txt","a") {|f| f.puts "#{link.content};#{e.class.name};#{e.message}" }
-    next
+    def include?(url)
+      @list.include? hash(url)
+    end
+
+    def add!(url)
+      @list << hash(url)
+      save
+    end
+
+    def save
+      File.write(@path, @list.to_json)
+    end
+
+    def hash(url)
+      Digest::MD5.hexdigest(url.strip)
+    end
+
+    def self.load_file(path)
+      list = JSON.parse(File.read(path), {symbolize_names: true})
+      self.new(list, path)
+    end
   end
+
+  class List
+
+    def initialize(list, path, processor, index)
+      @list      = list
+      @path      = path
+      @processor = processor
+      @index     = index
+    end
+
+    def include?(url)
+      @index.include?(url)
+    end
+
+    def add!(title, url)
+      entry = @processor.process([{
+        :title => title,
+        :href  => url
+      }]).first
+
+      @list << entry
+      save
+      @index.add!(entry[:id])
+    end
+
+    def save
+      File.write(@path, @list.to_json)
+    end
+
+    def self.load_file(path, processor, index)
+      list = JSON.parse(File.read(path), {symbolize_names: true})
+      self.new(list, path, processor, index)
+    end
+  end
+
 end
 
-File.open(JSON_FILE, "w") {|f|
-  f.write nodes.to_json
-}
+log       = Logger.new STDOUT
+urls      = File.read("ooolookamoose.txt").chomp.lines.reverse.each {|line| line.strip }
+JSON_FILE = "./moose.json"
+taglist   = File.read('tags.txt').chomp.lines.map {|line| line.strip }
+failed    = {}
 
+processor = Moose::Processor.new([
+  Moose::StamperService.new,
+  Moose::TagService.new(taglist)
+])
+
+mooselist = Moose::List.load_file(
+  "moose.json",
+  processor,
+  Moose::IndexList.load_file("indexes.json")
+)
+
+urls.each do |url|
+  log.info "Getting comment links from: #{url}"
+
+  doc   = Nokogiri::HTML(open(url, :allow_redirections => :safe))
+
+  log.info "#{doc.css(".usertext-body a").count} links"
+
+  doc.css(".usertext-body a").each do |link|
+    begin
+      url = link.content
+      next if mooselist.include? url
+      title = Moose::TitleParser.parse(url)
+
+      mooselist.add!(title, url)
+
+      log.info "Added: #{url}"
+    rescue => e
+      log.error "Couldn't download #{url}"
+      log.error e
+      failed[url] = "#{e.class.name}: #{e.message}"
+      next
+    end
+  end
+
+end
+
+File.write("failed.json", failed.to_json)
