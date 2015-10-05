@@ -19,7 +19,7 @@ module Moose
         
         title = entry[:title]
         taglist.each do |tag|
-          entry[:tags] << tag if title.include? tag
+          entry[:tags] << tag if title.include? tag or title.include? tag.titlecase
         end
 
         entry
