@@ -1,0 +1,27 @@
+#!/usr/bin/env ruby
+
+$LOAD_PATH.unshift(File.expand_path("moose"))
+
+require 'json'
+
+require './moose/processor'
+require './moose/stamper_service'
+require './moose/tag_service'
+require './moose/aggregator'
+require './moose/reddit_service'
+
+path = ARGV[0]
+
+abort "ERROR: Must specify path" if path.nil?
+
+taglist = File.read('tags.txt').chomp.lines.map {|line| line.strip }
+warn "Found #{taglist.size} tags"
+
+json  = JSON.parse(File.read(path), {symbolize_names: true})
+moose = Moose::Processor.new([
+  Moose::StamperService.new,
+  Moose::TagService.new(taglist),
+  Moose::Aggregator.new
+]).process(json)
+
+# puts JSON.pretty_generate(moose)
