@@ -9,7 +9,7 @@ module Moose
 
     def self.get_title_for(link)
       link = "http://#{link}" unless link.start_with? "http://"
-      body = Nokogiri::HTML(open(link))
+      body = Nokogiri::HTML(open(link, :allow_redirections => :safe))
       body.css("head title").first.content
     end
   end
